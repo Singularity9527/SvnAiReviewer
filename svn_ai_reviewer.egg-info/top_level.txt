@@ -1,0 +1,11 @@
+ai_provider
+batch_processor
+cli
+commands
+config_manager
+log_generator
+models
+prompt_builder
+report_generator
+svn_client
+templates

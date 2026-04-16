@@ -1,0 +1,51 @@
+# SVN AI 智能审查助手 - 配置文件
+# 使用 `svn-ai config` 命令可交互式生成此文件
+
+# AI 模式: local (本地私有化部署) 或 cloud (云端 API)
+ai_mode: local
+
+# ═══════════════════════════════════════
+# 本地模式配置 (Ollama / vLLM)
+# ═══════════════════════════════════════
+# 适用场景：内网环境，代码绝密，有 GPU 资源
+local:
+  # Ollama 默认: http://localhost:11434/v1
+  # vLLM 默认:   http://localhost:8000/v1
+  base_url: "http://localhost:11434/v1"
+
+  # 模型名称
+  # Ollama 示例: qwen2.5-coder:7b, codellama:34b
+  # vLLM 示例:   Qwen/Qwen2.5-Coder-7B-Instruct
+  model: "qwen2.5-coder:7b"
+
+  # API Key (Ollama 使用占位符即可)
+  api_key: "ollama"
+
+  # --- 可选参数 ---
+  # temperature: 0.3     # 生成温度 (0-2)
+  # max_tokens: 4096     # 最大生成 Token 数
+  # timeout: 120         # 请求超时（秒）
+
+# ═══════════════════════════════════════
+# 云端模式配置
+# ═══════════════════════════════════════
+# 适用场景：无内网 GPU，或使用更强的大模型
+cloud:
+  # OpenAI:     https://api.openai.com/v1
+  # 阿里云百炼:  https://dashscope.aliyuncs.com/compatible-mode/v1
+  # DeepSeek:   https://api.deepseek.com/v1
+  base_url: "https://api.openai.com/v1"
+
+  # 模型名称
+  # OpenAI:     gpt-4o, gpt-4o-mini
+  # 阿里云百炼:  qwen-plus, qwen-max
+  # DeepSeek:   deepseek-chat
+  model: "gpt-4o"
+
+  # API Key (必填，请替换为真实 Key)
+  api_key: "sk-..."
+
+  # --- 可选参数 ---
+  # temperature: 0.3
+  # max_tokens: 4096
+  # timeout: 120

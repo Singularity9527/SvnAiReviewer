@@ -1,0 +1,2 @@
+[console_scripts]
+svn-ai = cli:main
