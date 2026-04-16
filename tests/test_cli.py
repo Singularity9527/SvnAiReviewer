@@ -38,7 +38,10 @@ class TestCLIHelp(unittest.TestCase):
         result = self.runner.invoke(cli, ["review", "--help"])
         self.assertEqual(result.exit_code, 0)
         self.assertIn("--revision", result.output)
+        self.assertIn("--local", result.output)
         self.assertIn("--format", result.output)
+        self.assertIn("--username", result.output)
+        self.assertIn("--password", result.output)
         self.assertIn("--dry-run", result.output)
         self.assertIn("--show-prompt", result.output)
 
@@ -63,7 +66,17 @@ class TestReviewCommand(unittest.TestCase):
         """review 命令缺少 -r 参数应报错"""
         result = self.runner.invoke(cli, ["review"])
         self.assertNotEqual(result.exit_code, 0)
-        self.assertIn("--revision", result.output)
+        self.assertIn("--local", result.output)
+
+    def test_review_revision_and_local_conflict(self):
+        result = self.runner.invoke(cli, ["review", "-r", "1024", "--local"])
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("不能同时使用", result.output)
+
+    def test_review_local_and_url_conflict(self):
+        result = self.runner.invoke(cli, ["review", "--local", "--url", "https://svn.example.com/repo"])
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("不支持", result.output)
 
     @patch("commands.review.SVNClient")
     def test_review_invalid_revision(self, mock_svn_cls):
@@ -119,6 +132,70 @@ class TestReviewCommand(unittest.TestCase):
 
         result = self.runner.invoke(cli, ["review", "-r", "1024", "--dry-run"])
         self.assertEqual(result.exit_code, 0)
+        self.assertIn("dry-run", result.output)
+
+    @patch("commands.review.SVNClient")
+    def test_review_passes_auth_options_to_svn_client(self, mock_svn_cls):
+        mock_svn = MagicMock()
+        mock_svn_cls.return_value = mock_svn
+        mock_svn_cls.validate_revision.return_value = ("1024", None)
+
+        mock_diff = MagicMock()
+        mock_diff.error = None
+        mock_diff.is_empty = True
+        mock_svn.get_diff.return_value = mock_diff
+
+        result = self.runner.invoke(
+            cli,
+            [
+                "review",
+                "-r",
+                "1024",
+                "--username",
+                "aaa",
+                "--password",
+                "123456",
+                "--dry-run",
+            ],
+        )
+        self.assertEqual(result.exit_code, 0)
+        mock_svn_cls.assert_called_once()
+        _, kwargs = mock_svn_cls.call_args
+        self.assertEqual(kwargs.get("username"), "aaa")
+        self.assertEqual(kwargs.get("password"), "123456")
+
+    @patch("commands.review.SVNClient")
+    def test_review_local_dry_run_empty_diff(self, mock_svn_cls):
+        mock_svn = MagicMock()
+        mock_svn_cls.return_value = mock_svn
+
+        mock_diff = MagicMock()
+        mock_diff.error = None
+        mock_diff.is_empty = True
+        mock_svn.get_working_copy_diff.return_value = mock_diff
+
+        result = self.runner.invoke(cli, ["review", "--local", "--dry-run"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("没有未提交代码变更", result.output)
+
+    @patch("commands.review.SVNClient")
+    def test_review_local_dry_run_with_diff(self, mock_svn_cls):
+        mock_svn = MagicMock()
+        mock_svn_cls.return_value = mock_svn
+
+        mock_diff = MagicMock()
+        mock_diff.error = None
+        mock_diff.is_empty = False
+        mock_diff.total_files = 2
+        mock_diff.total_added_lines = 8
+        mock_diff.total_removed_lines = 3
+        mock_diff.raw_diff = "Index: a.py\n+line\n"
+        mock_diff.file_diffs = []
+        mock_svn.get_working_copy_diff.return_value = mock_diff
+
+        result = self.runner.invoke(cli, ["review", "--local", "--dry-run"])
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("本地未提交代码", result.output)
         self.assertIn("dry-run", result.output)
 
     def test_review_format_choices(self):

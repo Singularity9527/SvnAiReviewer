@@ -68,6 +68,12 @@ class TestPromptBuilder(unittest.TestCase):
         result = self.builder.build(self.diff, log)
         self.assertIn("无提交日志", result.user_prompt)
 
+    def test_local_review_prompt_contains_local_context(self):
+        log = _make_log(revision="LOCAL", author="", message="本地未提交代码审查")
+        result = self.builder.build(self.diff, log)
+        self.assertIn("rLOCAL", result.user_prompt)
+        self.assertIn("本地未提交代码审查", result.user_prompt)
+
     def test_no_file_diffs(self):
         diff = DiffData(revision="1024", raw_diff="some diff", file_diffs=[])
         result = self.builder.build(diff, self.log)

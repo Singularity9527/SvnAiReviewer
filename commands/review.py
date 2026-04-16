@@ -6,6 +6,7 @@ import json
 import logging
 import sys
 import os
+from datetime import datetime
 
 import click
 from rich.console import Console
@@ -24,6 +25,7 @@ from ai_provider.base import AIProviderError
 from config_manager import ConfigManager, ConfigError
 from report_generator import ReportGenerator, ReviewResult
 from batch_processor import BatchProcessor, BatchResult
+from models.log_data import LogData
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -39,7 +41,8 @@ def _load_config() -> dict:
 
 
 @click.command("review")
-@click.option("-r", "--revision", required=True, help="版本号或版本范围 (如: 1024 或 1020:1025)")
+@click.option("-r", "--revision", required=False, help="版本号或版本范围 (如: 1024 或 1020:1025)")
+@click.option("--local", "review_local", is_flag=True, default=False, help="审查当前工作副本未提交代码")
 @click.option("--format", "output_format", type=click.Choice(["markdown", "json"]), default="markdown",
               help="输出格式")
 @click.option("--output", "-o", "output_file", default=None, help="输出文件路径")
@@ -47,9 +50,11 @@ def _load_config() -> dict:
 @click.option("--working-dir", "-d", default=None, help="SVN 工作副本目录")
 @click.option("--url", "-u", default=None, help="远程 SVN 仓库 URL")
 @click.option("--trust-ssl", is_flag=True, default=False, help="信任自签名 SSL 证书")
+@click.option("--username", default=None, help="SVN 认证用户名（可选）")
+@click.option("--password", default=None, help="SVN 认证密码（可选）")
 @click.option("--max-chars", default=None, type=int, help="Diff 最大字符数限制")
 @click.option("--dry-run", is_flag=True, default=False, help="仅获取 Diff，不调用 AI")
-def review_command(revision, output_format, output_file, show_prompt, working_dir, url, trust_ssl, max_chars, dry_run):
+def review_command(revision, review_local, output_format, output_file, show_prompt, working_dir, url, trust_ssl, username, password, max_chars, dry_run):
     """审查指定 SVN 版本的代码变更
 
     示例:
@@ -59,31 +64,94 @@ def review_command(revision, output_format, output_file, show_prompt, working_di
       svn-ai review -r 1020:1025
 
       svn-ai review -r 1024 --format json -o report.json
+
+      svn-ai review --local
     """
     try:
-        _do_review(revision, output_format, output_file, show_prompt, working_dir, url, trust_ssl, max_chars, dry_run)
+        _do_review(
+            revision,
+            review_local,
+            output_format,
+            output_file,
+            show_prompt,
+            working_dir,
+            url,
+            trust_ssl,
+            username,
+            password,
+            max_chars,
+            dry_run,
+        )
     except KeyboardInterrupt:
         console.print("\n[yellow]已取消[/yellow]")
         sys.exit(130)
+    except click.ClickException as e:
+        e.show()
+        sys.exit(e.exit_code)
     except Exception as e:
         console.print(f"[red]✗ 未预期的错误:[/red] {e}")
         logger.exception("未预期的错误")
         sys.exit(1)
 
 
-def _do_review(revision, output_format, output_file, show_prompt, working_dir, url, trust_ssl, max_chars, dry_run):
+def _validate_review_args(revision, review_local, url):
+    """校验 review 命令参数组合。"""
+    if review_local and revision:
+        raise click.UsageError("--revision 与 --local 不能同时使用")
+    if not review_local and not revision:
+        raise click.UsageError("必须提供 --revision，或使用 --local 审查本地未提交代码")
+    if review_local and url:
+        raise click.UsageError("--local 模式不支持 --url，请改用本地工作副本目录")
+
+
+def _build_local_log_data() -> LogData:
+    """构造本地未提交代码审查用的伪提交信息。"""
+    return LogData(
+        revision="LOCAL",
+        author=os.environ.get("USERNAME") or os.environ.get("USER") or "",
+        date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        message="本地未提交代码审查",
+    )
+
+
+def _do_review(revision, review_local, output_format, output_file, show_prompt, working_dir, url, trust_ssl, username, password, max_chars, dry_run):
     """执行审查的核心逻辑"""
+    _validate_review_args(revision, review_local, url)
 
     # ─── 1. 初始化 SVN 客户端 ───
     console.print(Panel("[bold]SVN AI 智能审查助手[/bold]", style="blue"))
 
     try:
         with console.status("[bold blue]初始化 SVN 客户端...[/bold blue]"):
-            svn = SVNClient(working_dir=working_dir, repo_url=url, trust_server_cert=trust_ssl)
+            svn = SVNClient(
+                working_dir=working_dir,
+                repo_url=url,
+                trust_server_cert=trust_ssl,
+                username=username,
+                password=password,
+            )
         console.print("[green]\u2713[/green] SVN 客户端就绪")
     except SVNClientError as e:
         console.print(f"[red]✗ SVN 错误:[/red] {e}")
         sys.exit(1)
+
+    if review_local:
+        console.print("[blue]►[/blue] 审查目标: 本地未提交代码")
+        with console.status("[bold blue]获取本地未提交代码变更...[/bold blue]"):
+            diff_data = svn.get_working_copy_diff()
+            log_data = _build_local_log_data()
+
+        if diff_data.error:
+            console.print(f"[red]✗ 获取本地 Diff 失败:[/red] {diff_data.error}")
+            sys.exit(1)
+
+        if diff_data.is_empty:
+            console.print("[yellow]⚠ 当前工作副本没有未提交代码变更。[/yellow]")
+            sys.exit(0)
+
+        _print_diff_summary(diff_data, log_data)
+        _finish_review(diff_data, log_data, output_format, output_file, show_prompt, max_chars, dry_run)
+        return
 
     # ─── 2. 验证版本号 ───
     try:
@@ -116,6 +184,12 @@ def _do_review(revision, output_format, output_file, show_prompt, working_dir, u
     # 显示变更摘要
     _print_diff_summary(diff_data, log_data)
 
+    _finish_review(diff_data, log_data, output_format, output_file, show_prompt, max_chars, dry_run)
+
+
+def _finish_review(diff_data, log_data, output_format, output_file, show_prompt, max_chars, dry_run):
+    """执行 Prompt、AI 和报告生成的公共逻辑。"""
+    
     if dry_run:
         console.print("\n[yellow]--dry-run 模式，跳过 AI 审查。[/yellow]")
         if show_prompt:

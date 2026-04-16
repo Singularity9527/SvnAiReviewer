@@ -294,7 +294,7 @@ class PromptBuilder:
         # 构建文件列表
         file_list_lines = []
         for fd in file_diffs:
-            status_map = {"A": "新增", "D": "删除", "M": "修改", "R": "替换"}
+            status_map = {"A": "新增", "D": "删除", "M": "修改", "R": "替换", "?": "未纳入版本控制"}
             status_text = status_map.get(fd.status, fd.status)
             file_list_lines.append(
                 f"- `{fd.file_path}` ({status_text}, +{fd.added_lines}/-{fd.removed_lines})"
@@ -332,7 +332,7 @@ class PromptBuilder:
             return "（无变更文件）"
 
         lines = []
-        status_map = {"A": "新增", "D": "删除", "M": "修改", "R": "替换"}
+        status_map = {"A": "新增", "D": "删除", "M": "修改", "R": "替换", "?": "未纳入版本控制"}
 
         for fd in diff_data.file_diffs:
             status_text = status_map.get(fd.status, fd.status)

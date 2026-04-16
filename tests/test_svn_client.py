@@ -124,6 +124,13 @@ Index: src/utils.py
         file_diffs = self.client._parse_diff_output(None)
         self.assertEqual(len(file_diffs), 0)
 
+    def test_parse_status_output(self):
+        raw_status = "M       src/main.py\nA       src/new_file.py\n?       tmp/debug.txt\n"
+        status_map = self.client._parse_status_output(raw_status)
+        self.assertEqual(status_map["src/main.py"], "M")
+        self.assertEqual(status_map["src/new_file.py"], "A")
+        self.assertEqual(status_map["tmp/debug.txt"], "?")
+
 
 class TestLogParsing(unittest.TestCase):
     """Log 输出解析测试"""
@@ -154,6 +161,22 @@ Changed paths:
 ------------------------------------------------------------------------
 """
 
+    SAMPLE_LOG_WITH_UNICODE_PLACEHOLDER = """------------------------------------------------------------------------
+r38374 | yangql@SZNARI | 2026-04-16 09:34:50 +0800 (Thu, 16 Apr 2026) | 1 lines
+
+feat(libservices):{U+589E}{U+52A0}{U+670D}{U+52A1}{U+8282}{U+70B9}{U+6269}{U+5C55}{U+4FE1}{U+606F}
+------------------------------------------------------------------------
+"""
+
+    SAMPLE_LOG_ZH = """------------------------------------------------------------------------
+r38374 | yangql@SZNARI | 2026-04-16 09:34:50 +0800 (周四, 2026-04-16) | 1 行
+Changed paths:
+   M /develop/01_Middleware/example.py
+
+feat(libservices):增加服务节点扩展信息,客户端根据用户信息定位 author:liukai
+------------------------------------------------------------------------
+"""
+
     @patch("shutil.which", return_value="/usr/bin/svn")
     def setUp(self, mock_which):
         self.client = SVNClient()
@@ -180,6 +203,15 @@ Changed paths:
     def test_parse_empty_log(self):
         logs = self.client._parse_multi_log_output("")
         self.assertEqual(len(logs), 0)
+
+    def test_parse_log_decodes_unicode_placeholder(self):
+        log = self.client._parse_log_output(self.SAMPLE_LOG_WITH_UNICODE_PLACEHOLDER, "38374")
+        self.assertIn("增加服务节点扩展信息", log.message)
+
+    def test_parse_log_with_chinese_line_unit(self):
+        log = self.client._parse_log_output(self.SAMPLE_LOG_ZH, "38374")
+        self.assertEqual(log.author, "yangql@SZNARI")
+        self.assertIn("增加服务节点扩展信息", log.message)
 
 
 class TestDiffDataModel(unittest.TestCase):
@@ -307,6 +339,43 @@ Fix bug
         log = self.client.get_log("1024")
         self.assertIsNone(log.error)
         self.assertEqual(log.author, "admin")
+
+    @patch.object(SVNClient, "get_working_copy_status")
+    @patch("subprocess.run")
+    def test_get_working_copy_diff_success(self, mock_run, mock_status):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="""Index: src/main.py
+===================================================================
+--- src/main.py	(revision 10)
++++ src/main.py	(working copy)
+@@ -1 +1,2 @@
++line2
+""",
+            stderr="",
+        )
+        mock_status.return_value = {"src/main.py": "M", "tmp/debug.txt": "?"}
+
+        diff = self.client.get_working_copy_diff()
+        self.assertEqual(diff.revision, "LOCAL")
+        self.assertIsNone(diff.error)
+        self.assertEqual(len(diff.file_diffs), 2)
+        self.assertEqual(diff.file_diffs[0].status, "M")
+        self.assertEqual(diff.file_diffs[1].file_path, "tmp/debug.txt")
+        self.assertEqual(diff.file_diffs[1].status, "?")
+
+    @patch.object(SVNClient, "get_working_copy_status")
+    @patch("subprocess.run")
+    def test_get_working_copy_diff_command_error(self, mock_run, mock_status):
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="svn: E155007: 'C:/repo' is not a working copy",
+        )
+        mock_status.return_value = {}
+
+        diff = self.client.get_working_copy_diff()
+        self.assertIsNotNone(diff.error)
 
     @patch("shutil.which", return_value=None)
     def test_svn_not_installed(self, mock_which):

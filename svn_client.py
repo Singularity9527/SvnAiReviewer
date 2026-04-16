@@ -7,7 +7,7 @@ import logging
 import re
 import subprocess
 import shutil
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from models.diff_data import DiffData, FileDiff
 from models.log_data import LogData
@@ -68,13 +68,19 @@ class SVNClient:
 
     # SVN log 信息行正则：r版本号 | 作者 | 日期 | 行数
     _LOG_INFO_PATTERN = re.compile(
-        r"^r(\d+)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(\d+)\s+lines?$"
+        r"^r(\d+)\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|\s*(\d+)\s+.+$"
     )
 
     # SVN 变更路径正则
     _CHANGED_PATH_PATTERN = re.compile(
         r"^\s+([AMDRC])\s+(.+)$"
     )
+
+    # svn status 输出：首列为状态，文件路径位于末尾
+    _STATUS_LINE_PATTERN = re.compile(r"^([ACDIMRX!?~ ])(?:.{0,6})\s+(.+)$")
+
+    # 非标准 Unicode 占位符：{U+4E2D}
+    _UNICODE_PLACEHOLDER_PATTERN = re.compile(r"\{U\+([0-9A-Fa-f]{4,6})\}")
 
     def __init__(self, working_dir: Optional[str] = None, svn_binary: str = "svn",
                  timeout: int = 60, encoding: str = None,
@@ -147,7 +153,18 @@ class SVNClient:
         if self.password:
             cmd.extend(["--password", self.password])
 
-        logger.debug("执行命令: %s", " ".join(cmd))
+        safe_cmd = []
+        i = 0
+        while i < len(cmd):
+            item = cmd[i]
+            safe_cmd.append(item)
+            if item == "--password" and i + 1 < len(cmd):
+                safe_cmd.append("***")
+                i += 2
+                continue
+            i += 1
+
+        logger.debug("执行命令: %s", " ".join(safe_cmd))
 
         try:
             result = subprocess.run(
@@ -286,6 +303,50 @@ class SVNClient:
             file_diffs=file_diffs,
         )
 
+    def get_working_copy_status(self) -> Dict[str, str]:
+        """获取当前工作副本的本地变更状态。
+
+        Returns:
+            Dict[str, str]: 文件路径到状态码的映射
+        """
+        stdout, _ = self._run_command(["status"])
+        return self._parse_status_output(stdout)
+
+    def get_working_copy_diff(self) -> DiffData:
+        """获取当前工作副本未提交的代码差异。"""
+        try:
+            stdout, _ = self._run_command(["diff"])
+            status_map = self.get_working_copy_status()
+        except SVNCommandError as e:
+            return DiffData(
+                revision="LOCAL",
+                raw_diff="",
+                error=str(e),
+            )
+
+        file_diffs = self._parse_diff_output(stdout)
+
+        for file_diff in file_diffs:
+            if file_diff.file_path in status_map:
+                file_diff.status = status_map[file_diff.file_path]
+
+        diff_paths = {file_diff.file_path for file_diff in file_diffs}
+        for file_path, status in status_map.items():
+            if file_path not in diff_paths:
+                file_diffs.append(
+                    FileDiff(
+                        file_path=file_path,
+                        status=status,
+                        diff_content="",
+                    )
+                )
+
+        return DiffData(
+            revision="LOCAL",
+            raw_diff=stdout,
+            file_diffs=file_diffs,
+        )
+
     def get_log(self, revision: str, verbose: bool = True) -> LogData:
         """获取指定版本的提交日志
 
@@ -407,6 +468,27 @@ class SVNClient:
             ))
 
         return file_diffs
+
+    def _parse_status_output(self, raw_status: str) -> Dict[str, str]:
+        """解析 svn status 输出。"""
+        if not raw_status or raw_status.strip() == "":
+            return {}
+
+        results = {}
+        for line in raw_status.splitlines():
+            if not line.strip():
+                continue
+
+            match = self._STATUS_LINE_PATTERN.match(line)
+            if not match:
+                continue
+
+            status = match.group(1).strip() or " "
+            file_path = match.group(2).strip()
+            if file_path:
+                results[file_path] = status
+
+        return results
 
     @staticmethod
     def _detect_file_status(diff_content: str) -> str:
@@ -530,15 +612,32 @@ class SVNClient:
                 else:
                     break
 
+            message = "\n".join(message_lines).strip()
+            message = self._decode_unicode_placeholders(message)
+
             results.append(LogData(
                 revision=revision,
                 author=author,
                 date=date,
-                message="\n".join(message_lines).strip(),
+                message=message,
                 changed_paths=changed_paths,
             ))
 
         return results
+
+    @classmethod
+    def _decode_unicode_placeholders(cls, text: str) -> str:
+        """将 {U+XXXX} 形式的占位符还原为真实字符。"""
+        if not text:
+            return text
+
+        def _replace(match: re.Match) -> str:
+            try:
+                return chr(int(match.group(1), 16))
+            except (ValueError, OverflowError):
+                return match.group(0)
+
+        return cls._UNICODE_PLACEHOLDER_PATTERN.sub(_replace, text)
 
     def get_revisions_in_range(self, start_rev: str, end_rev: str) -> List[str]:
         """获取版本范围内的所有版本号列表

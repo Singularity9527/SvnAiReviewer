@@ -102,6 +102,12 @@ svn-ai review -r 1024
 # 指定工作副本目录
 svn-ai review -r 1024 -d /path/to/svn/working-copy
 
+# 审查当前工作副本未提交代码
+svn-ai review --local
+
+# 审查指定目录中的未提交代码
+svn-ai review --local -d /path/to/svn/working-copy
+
 # 审查远程 SVN 仓库（无需工作副本）
 svn-ai review -r 1024 -u https://svn.example.com/repo/trunk
 
@@ -119,16 +125,26 @@ svn-ai review -r 1024 -u https://10.1.0.101/svn/project --trust-ssl
 用法: svn-ai review [OPTIONS]
 
 选项:
-  -r, --revision TEXT    版本号或范围 (如: 1024 或 1020:1025)  [必填]
+  -r, --revision TEXT    版本号或范围 (如: 1024 或 1020:1025)
+  --local                审查当前工作副本未提交代码
   -d, --working-dir DIR  SVN 工作副本目录
   -u, --url URL          远程 SVN 仓库 URL
   --trust-ssl            信任自签名 SSL 证书
+  --username TEXT        SVN 认证用户名（可选）
+  --password TEXT        SVN 认证密码（可选）
   --format [markdown|json]  输出格式 (默认: markdown)
   -o, --output FILE      保存报告到文件
   --show-prompt          显示发送给 AI 的 Prompt（调试用）
   --max-chars INT        Diff 最大字符数限制
   --dry-run              仅获取 Diff，不调用 AI
 ```
+
+参数说明：
+
+- `--revision` 与 `--local` 不能同时使用。
+- `--local` 模式下不能使用 `--url`。
+- `--local` 模式下如果当前工作副本没有未提交改动，工具会直接提示并退出。
+- 如果当前环境没有可用 SVN 凭据，可通过 `--username` 和 `--password` 显式传入认证信息。
 
 **示例：**
 
@@ -139,17 +155,30 @@ svn-ai review -r 37965
 # 版本范围批量审查（自动逐版本审查并汇总）
 svn-ai review -r 37960:37965
 
+# 本地未提交代码审查
+svn-ai review --local
+
+# 本地未提交代码审查（指定工作副本目录）
+svn-ai review --local -d /path/to/svn/working-copy
+
 # 保存报告
 svn-ai review -r 1024 -o review_report.md
 
 # JSON 格式报告
 svn-ai review -r 1024 --format json -o report.json
 
+# 本地未提交代码审查并导出 JSON
+svn-ai review --local --format json -o local_review.json
+
 # 仅预览变更（不调用 AI）
 svn-ai review -r 1024 --dry-run
+svn-ai review --local --dry-run
 
 # 远程仓库 + 内网证书
 svn-ai review -r 37965 -u https://10.1.0.101/svn/CygSys/develop --trust-ssl
+
+# 显式传入 SVN 用户名和密码
+svn-ai review -r 37965 -u https://10.1.0.101/svn/CygSys/develop --trust-ssl --username aaa --password 123456
 ```
 
 ### `svn-ai config` — 配置管理
@@ -187,6 +216,20 @@ svn-ai generate-log -d /path/to/working-copy
 1. 当前目录下的 `config.yaml`
 2. 当前目录下的 `.svn-ai/config.yaml`
 3. 用户目录 `~/.svn-ai/config.yaml`
+
+## Linux 构建
+
+- Linux 单文件可执行程序请在 Linux 环境中构建，不建议直接在 Windows 上交叉编译。
+- 构建需要 Python 3.9+；如果系统默认 `python3` 太旧，请使用 `python3.9`、`python3.10` 或 `python3.11`。
+- 项目已提供 Linux 构建脚本：`build.sh`
+- 详细步骤见 `LINUX_BUILD.md`
+
+快速命令：
+
+```bash
+chmod +x build.sh
+./build.sh
+```
 
 ### 完整配置项
 
